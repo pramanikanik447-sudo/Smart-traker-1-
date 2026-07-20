@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useMemo, FormEvent } from 'react';
+import React, { useState, useEffect, useMemo, FormEvent, useRef } from 'react';
 import { 
   Plus, 
   Trash2, 
@@ -17,10 +17,11 @@ import {
   ChevronLeft,
   Edit2,
   Check,
-  FileText
+  FileText, MoreVertical, Contact, History, RotateCcw,
+  Download, Upload
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Debt, DebtFormData } from './types';
+import { Debt, DebtFormData, SavedContact, DeletedCustomer } from './types';
 
 interface CustomerGroup {
   name: string;
@@ -91,6 +92,7 @@ export default function App() {
   const [isEditingCustomer, setIsEditingCustomer] = useState(false);
   const [editCustomerName, setEditCustomerName] = useState('');
   const [editCustomerPhone, setEditCustomerPhone] = useState('');
+  const [editCustomerError, setEditCustomerError] = useState<string | null>(null);
 
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [confirmingCustomerDelete, setConfirmingCustomerDelete] = useState<string | null>(null);
@@ -101,9 +103,87 @@ export default function App() {
   const [editReason, setEditReason] = useState('');
   const [editDate, setEditDate] = useState('');
 
+  // Saved Contacts State
+  const [savedContacts, setSavedContacts] = useState<SavedContact[]>(() => {
+    const saved = localStorage.getItem('smart-tracker-saved-contacts');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [isSavedContactsOpen, setIsSavedContactsOpen] = useState(false);
+  const [newContactName, setNewContactName] = useState('');
+  const [newContactPhone, setNewContactPhone] = useState('');
+  const [contactFormError, setContactFormError] = useState<string | null>(null);
+
+  // Recently Deleted State
+  const [recentlyDeleted, setRecentlyDeleted] = useState<DeletedCustomer[]>(() => {
+    const saved = localStorage.getItem('smart-tracker-recently-deleted');
+    if (!saved) return [];
+    try {
+      const parsed = JSON.parse(saved) as DeletedCustomer[];
+      // Filter out items older than 15 days
+      const fifteenDaysAgo = Date.now() - 15 * 24 * 60 * 60 * 1000;
+      return parsed.filter(item => new Date(item.deletedAt).getTime() > fifteenDaysAgo);
+    } catch {
+      return [];
+    }
+  });
+  const [isRecentlyDeletedOpen, setIsRecentlyDeletedOpen] = useState(false);
+  const [confirmingPermanentDelete, setConfirmingPermanentDelete] = useState<string | null>(null);
+  const [confirmingContactDelete, setConfirmingContactDelete] = useState<string | null>(null);
+
+  // Backup / Restore Refs and State
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Auto-hide notifications
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => {
+        setNotification(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
+
+  useEffect(() => {
+    if (!isRecentlyDeletedOpen) {
+      setConfirmingPermanentDelete(null);
+    }
+  }, [isRecentlyDeletedOpen]);
+
+  useEffect(() => {
+    if (!isSavedContactsOpen) {
+      setConfirmingContactDelete(null);
+    }
+  }, [isSavedContactsOpen]);
+
   useEffect(() => {
     localStorage.setItem('smart-tracker-debts', JSON.stringify(debts));
   }, [debts]);
+
+  useEffect(() => {
+    localStorage.setItem('smart-tracker-saved-contacts', JSON.stringify(savedContacts));
+  }, [savedContacts]);
+
+  useEffect(() => {
+    localStorage.setItem('smart-tracker-recently-deleted', JSON.stringify(recentlyDeleted));
+  }, [recentlyDeleted]);
+
+  // Synchronize history with details view
+  useEffect(() => {
+    if (currentView === 'details') {
+      window.history.pushState({ view: 'details' }, '');
+    }
+  }, [currentView]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      if (currentView === 'details') {
+        setCurrentView('dashboard');
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [currentView]);
 
   useEffect(() => {
     const handleFocus = (e: FocusEvent) => {
@@ -177,6 +257,164 @@ export default function App() {
 
   const [formError, setFormError] = useState<string | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  const handleSaveContact = (e: FormEvent) => {
+    e.preventDefault();
+    setContactFormError(null);
+
+    const nameTrimmed = newContactName.trim();
+    const phoneTrimmed = newContactPhone.replace(/\D/g, '').slice(0, 10);
+
+    if (!nameTrimmed) {
+      setContactFormError('Name is required');
+      return;
+    }
+
+    if (phoneTrimmed.length !== 10) {
+      setContactFormError('Please enter a valid 10-digit phone number');
+      return;
+    }
+
+    const duplicate = savedContacts.find(c => c.phone === phoneTrimmed);
+    if (duplicate) {
+      setContactFormError(`This number is already saved as [${duplicate.name}]`);
+      return;
+    }
+
+    const newContact: SavedContact = {
+      id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      name: nameTrimmed,
+      phone: phoneTrimmed
+    };
+
+    setSavedContacts(prev => [newContact, ...prev]);
+    setNewContactName('');
+    setNewContactPhone('');
+  };
+
+  const handleDeleteContact = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSavedContacts(prev => prev.filter(c => c.id !== id));
+  };
+
+  const handleRestoreCustomer = (deleted: DeletedCustomer) => {
+    // Add their debts back
+    setDebts(prev => [...deleted.debts, ...prev]);
+    // Remove from recentlyDeleted
+    setRecentlyDeleted(prev => prev.filter(item => item.id !== deleted.id));
+  };
+
+  const handlePermanentDeleteCustomer = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRecentlyDeleted(prev => prev.filter(item => item.id !== id));
+  };
+
+  const handleBackup = () => {
+    try {
+      const backupData = {
+        version: "1.0",
+        backupDate: new Date().toISOString(),
+        debts,
+        savedContacts,
+        recentlyDeleted
+      };
+      
+      const jsonString = JSON.stringify(backupData, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      const dateStr = new Date().toISOString().split('T')[0];
+      link.href = url;
+      link.download = `smart_tracker_backup_${dateStr}.json`;
+      
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      setNotification({
+        type: 'success',
+        message: 'Backup downloaded successfully!'
+      });
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: 'Failed to create backup file.'
+      });
+    }
+  };
+
+  const handleRestoreClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const content = event.target?.result as string;
+        const parsed = JSON.parse(content);
+        
+        if (parsed && typeof parsed === 'object') {
+          const restoredDebts = Array.isArray(parsed.debts) ? parsed.debts : [];
+          const restoredContacts = Array.isArray(parsed.savedContacts) ? parsed.savedContacts : [];
+          const restoredDeleted = Array.isArray(parsed.recentlyDeleted) ? parsed.recentlyDeleted : [];
+
+          if (restoredDebts.length === 0 && restoredContacts.length === 0 && restoredDeleted.length === 0) {
+            throw new Error("No valid data found in backup file.");
+          }
+
+          setDebts(restoredDebts);
+          setSavedContacts(restoredContacts);
+          setRecentlyDeleted(restoredDeleted);
+          
+          setNotification({
+            type: 'success',
+            message: 'All data restored successfully!'
+          });
+        } else {
+          throw new Error("Invalid backup file structure.");
+        }
+      } catch (err) {
+        setNotification({
+          type: 'error',
+          message: err instanceof Error ? err.message : 'Invalid backup file.'
+        });
+      }
+      e.target.value = '';
+    };
+
+    reader.onerror = () => {
+      setNotification({
+        type: 'error',
+        message: 'Error reading file.'
+      });
+      e.target.value = '';
+    };
+
+    reader.readAsText(file);
+  };
+
+  const handleSelectContact = (contact: SavedContact) => {
+    setFormData(prev => ({
+      ...prev,
+      customerName: contact.name,
+      phoneNumber: contact.phone
+    }));
+    const existing = (Object.values(customerGroups) as CustomerGroup[]).find(g => g.phone === contact.phone);
+    if (existing) {
+      setPhoneError(`This number is already exist [${existing.name}]`);
+    } else {
+      setPhoneError(null);
+    }
+    setIsSavedContactsOpen(false);
+    setIsModalOpen(true);
+  };
 
   const handleAddDebt = (e: FormEvent) => {
     e.preventDefault();
@@ -199,7 +437,7 @@ export default function App() {
     if (existingCustomer) {
       setPhoneError(null);
       setTimeout(() => {
-        setPhoneError(`This phone number is already registered with '${existingCustomer.name}'.`);
+        setPhoneError(`This number is already exist [${existingCustomer.name}]`);
       }, 10);
       return;
     }
@@ -233,6 +471,30 @@ export default function App() {
       reason: formData.reason,
       entryType: formData.entryType
     };
+
+    // Automatically save contact if it doesn't already exist or update name if changed
+    const contactPhone = formData.phoneNumber.replace(/\D/g, '').slice(0, 10);
+    const contactName = formData.customerName.trim();
+    if (contactPhone.length === 10 && contactName) {
+      setSavedContacts(prev => {
+        const exists = prev.some(c => c.phone === contactPhone);
+        if (!exists) {
+          const newContact: SavedContact = {
+            id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            name: contactName,
+            phone: contactPhone
+          };
+          return [newContact, ...prev];
+        } else {
+          return prev.map(c => {
+            if (c.phone === contactPhone) {
+              return { ...c, name: contactName };
+            }
+            return c;
+          });
+        }
+      });
+    }
 
     setDebts([newDebt, ...debts]);
     setFormData({ customerName: '', phoneNumber: '', amount: '', reason: '', entryType: 'debt' });
@@ -338,7 +600,31 @@ export default function App() {
   };
 
   const handleUpdateCustomer = () => {
+    setEditCustomerError(null);
     if (!selectedCustomerKey || !editCustomerName) return;
+
+    if (!editCustomerPhone || editCustomerPhone.length !== 10) {
+      setEditCustomerError('Please enter a valid 10-digit mobile number.');
+      return;
+    }
+
+    const newKey = `${editCustomerName.toLowerCase()}-${editCustomerPhone}`;
+    if (newKey !== selectedCustomerKey && customerGroups[newKey]) {
+      setEditCustomerError(`This number is already exist [${customerGroups[newKey].name}]`);
+      return;
+    }
+
+    if (editCustomerPhone) {
+      const existingCustomer = (Object.values(customerGroups) as CustomerGroup[]).find(
+        (group) => group.phone === editCustomerPhone && `${group.name.toLowerCase()}-${group.phone}` !== selectedCustomerKey
+      );
+      if (existingCustomer) {
+        setEditCustomerError(`This number is already exist [${existingCustomer.name}]`);
+        return;
+      }
+    }
+
+    const oldPhone = customerGroups[selectedCustomerKey]?.phone;
 
     const updatedDebts = debts.map(debt => {
       const key = `${debt.customerName.toLowerCase()}-${debt.phoneNumber}`;
@@ -348,8 +634,36 @@ export default function App() {
       return debt;
     });
 
+    if (oldPhone) {
+      setSavedContacts(prev => {
+        const cleanOldPhone = oldPhone.replace(/\D/g, '').slice(0, 10);
+        const cleanNewPhone = editCustomerPhone.replace(/\D/g, '').slice(0, 10);
+        const exists = prev.some(c => c.phone === cleanOldPhone || c.phone === cleanNewPhone);
+        
+        if (exists) {
+          return prev.map(c => {
+            if (c.phone === cleanOldPhone || c.phone === cleanNewPhone) {
+              return {
+                ...c,
+                name: editCustomerName.trim(),
+                phone: cleanNewPhone
+              };
+            }
+            return c;
+          });
+        } else {
+          const newContact: SavedContact = {
+            id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            name: editCustomerName.trim(),
+            phone: cleanNewPhone
+          };
+          return [newContact, ...prev];
+        }
+      });
+    }
+
     setDebts(updatedDebts);
-    setSelectedCustomerKey(`${editCustomerName.toLowerCase()}-${editCustomerPhone}`);
+    setSelectedCustomerKey(newKey);
     setIsEditingCustomer(false);
   };
 
@@ -388,7 +702,9 @@ export default function App() {
     setEditingDebtId(debt.id);
     setEditAmount(debt.amount.toString());
     setEditReason(debt.reason || '');
-    setEditDate(new Date(debt.date).toISOString().slice(0, 16));
+    const localDate = new Date(debt.date);
+    const tzoffset = localDate.getTimezoneOffset() * 60000;
+    setEditDate(new Date(localDate.getTime() - tzoffset).toISOString().slice(0, 16));
   };
 
   const openDetails = (key: string) => {
@@ -400,9 +716,24 @@ export default function App() {
   };
 
   const deleteCustomer = (key: string) => {
+    const group = customerGroups[key];
+    if (group) {
+      const newDeleted: DeletedCustomer = {
+        id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        name: group.name,
+        phone: group.phone,
+        debts: group.debts,
+        deletedAt: new Date().toISOString()
+      };
+      setRecentlyDeleted(prev => [newDeleted, ...prev]);
+    }
     setDebts(debts.filter(debt => `${debt.customerName.toLowerCase()}-${debt.phoneNumber}` !== key));
     setConfirmingCustomerDelete(null);
-    setCurrentView('dashboard');
+    if (window.history.state?.view === 'details') {
+      window.history.back();
+    } else {
+      setCurrentView('dashboard');
+    }
   };
 
   const [dashScrollY, setDashScrollY] = useState(0);
@@ -431,6 +762,72 @@ export default function App() {
                     </h1>
                     <p className="text-[13px] text-slate-500 font-semibold ml-1 mt-1.5 uppercase tracking-wider">Financial Management</p>
                   </div>
+                  <div className="relative">
+                    <button 
+                      onClick={() => setIsMenuOpen(!isMenuOpen)}
+                      className="p-2 rounded-full hover:bg-slate-100 text-slate-500 transition-colors"
+                    >
+                      <MoreVertical size={24} />
+                    </button>
+                    <AnimatePresence>
+                      {isMenuOpen && (
+                        <>
+                          <div 
+                            className="fixed inset-0 z-40"
+                            onClick={() => setIsMenuOpen(false)}
+                          />
+                          <motion.div
+                            initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                            className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-lg border border-slate-100 py-1.5 z-50 overflow-hidden"
+                          >
+                            <button 
+                              onClick={() => {
+                                setIsMenuOpen(false);
+                                setIsSavedContactsOpen(true);
+                              }}
+                              className="w-full px-4 py-2.5 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors flex items-center gap-2"
+                            >
+                              <Contact size={16} className="text-indigo-600 animate-pulse" />
+                              Save Contact
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setIsMenuOpen(false);
+                                setIsRecentlyDeletedOpen(true);
+                              }}
+                              className="w-full px-4 py-2.5 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors flex items-center gap-2"
+                            >
+                              <History size={16} className="text-rose-600" />
+                              Recently Deleted
+                            </button>
+                            <div className="h-px bg-slate-100 my-1"></div>
+                            <button 
+                              onClick={() => {
+                                setIsMenuOpen(false);
+                                handleBackup();
+                              }}
+                              className="w-full px-4 py-2.5 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors flex items-center gap-2"
+                            >
+                              <Download size={16} className="text-emerald-600" />
+                              Backup Data
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setIsMenuOpen(false);
+                                handleRestoreClick();
+                              }}
+                              className="w-full px-4 py-2.5 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors flex items-center gap-2"
+                            >
+                              <Upload size={16} className="text-indigo-600" />
+                              Restore Data
+                            </button>
+                          </motion.div>
+                        </>
+                      )}
+                    </AnimatePresence>
+                  </div>
                 </div>
 
                 {/* Summary Card */}
@@ -445,6 +842,9 @@ export default function App() {
                       <span className="text-[32px] mr-1.5 font-semibold">₹</span>
                       {totalDebt.toLocaleString()}
                     </h2>
+                    <p className="text-white/90 text-sm font-semibold mt-3">
+                      Total Customer {Object.keys(customerGroups).length}
+                    </p>
                   </div>
                   <TrendingDown className="absolute right-[-10px] bottom-[-20px] w-64 h-64 text-white/10 -rotate-12" strokeWidth={2.5} />
                 </motion.div>
@@ -600,8 +1000,12 @@ export default function App() {
               <div className="pt-4 mb-2">
                 <button 
                   onClick={() => {
-                    setCurrentView('dashboard');
                     setDetailScrollY(0);
+                    if (window.history.state?.view === 'details') {
+                      window.history.back();
+                    } else {
+                      setCurrentView('dashboard');
+                    }
                   }}
                   className="mb-4 -ml-2 p-2 hover:bg-slate-100  rounded-full transition-colors inline-flex items-center gap-2 text-slate-600  group"
                 >
@@ -620,7 +1024,10 @@ export default function App() {
                         <input
                           autoFocus
                           value={editCustomerName}
-                          onChange={(e) => setEditCustomerName(e.target.value)}
+                          onChange={(e) => {
+                            setEditCustomerName(e.target.value);
+                            setEditCustomerError(null);
+                          }}
                           className="bg-white  border-b-2 border-indigo-500 text-3xl font-black px-1 py-1 focus:outline-none w-full truncate  tracking-tight"
                         />
                         <div className="flex items-center gap-2 mt-1">
@@ -630,12 +1037,25 @@ export default function App() {
                             onChange={(e) => {
                               const val = e.target.value.replace(/\D/g, '').slice(0, 10);
                               setEditCustomerPhone(val);
+                              setEditCustomerError(null);
                             }}
                             className="bg-white  border-b border-slate-200  text-slate-500  text-base px-1 py-1 focus:outline-none w-full truncate font-bold"
                             placeholder="Phone Number"
                             maxLength={10}
                           />
                         </div>
+                        <AnimatePresence>
+                          {editCustomerError && (
+                            <motion.p
+                              initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                              animate={{ opacity: 1, height: 'auto', marginTop: 4 }}
+                              exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                              className="text-[10px] font-bold text-red-500 uppercase tracking-wider"
+                            >
+                              {editCustomerError}
+                            </motion.p>
+                          )}
+                        </AnimatePresence>
                       </div>
                     ) : (
                       <div className="flex justify-between items-start flex-1 min-w-0 pr-4 px-1">
@@ -811,12 +1231,17 @@ export default function App() {
                                   className="w-full bg-white  border border-slate-200  rounded px-2 py-1 text-sm font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 "
                                 />
                               </div>
-                              <input
-                                type="datetime-local"
-                                value={editDate}
-                                onChange={(e) => setEditDate(e.target.value)}
-                                className="w-full bg-white  border border-slate-200  rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 "
-                              />
+                              <div className="relative w-full">
+                                <div className="w-full bg-white border border-slate-200 rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 flex items-center">
+                                  <span className="text-slate-800">{new Date(editDate).toLocaleString('en-US', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true })}</span>
+                                </div>
+                                <input
+                                  type="datetime-local"
+                                  value={editDate}
+                                  onChange={(e) => setEditDate(e.target.value)}
+                                  className="absolute top-0 left-0 w-full h-full opacity-0 cursor-pointer"
+                                />
+                              </div>
                               <textarea
                                 value={editReason}
                                 onChange={(e) => setEditReason(e.target.value)}
@@ -854,12 +1279,13 @@ export default function App() {
                                 </p>
                               )}
                               <p className="text-xs text-slate-400 ">
-                                {new Date(debt.date).toLocaleDateString(undefined, { 
+                                {new Date(debt.date).toLocaleString(undefined, { 
                                   day: 'numeric', 
                                   month: 'short', 
                                   year: 'numeric',
                                   hour: '2-digit',
-                                  minute: '2-digit'
+                                  minute: '2-digit',
+                                  hour12: true
                                 })}
                               </p>
                             </>
@@ -946,7 +1372,23 @@ export default function App() {
 
               <form onSubmit={handleAddDebt} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700  mb-1">Customer Name *</label>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="block text-sm font-medium text-slate-700">Customer Name *</label>
+                    {savedContacts.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsModalOpen(false);
+                          setIsSavedContactsOpen(true);
+                        }}
+                        className="text-xs text-indigo-600 hover:text-indigo-800 font-bold flex items-center gap-1 transition-colors"
+                        title="Pick from Saved Contacts"
+                      >
+                        <Contact size={12} className="animate-pulse" />
+                        Pick Saved
+                      </button>
+                    )}
+                  </div>
                   <div className="relative">
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                     <input
@@ -991,13 +1433,12 @@ export default function App() {
                         if (val.length === 10) {
                           const existing = (Object.values(customerGroups) as CustomerGroup[]).find(g => g.phone === val);
                           if (existing) {
-                            setPhoneError(`This phone number is already registered with '${existing.name}'.`);
+                            setPhoneError(`This number is already exist [${existing.name}]`);
                           } else {
                             setPhoneError(null);
                           }
                         } else {
-                          // Clear specific "already registered" error if number is no longer 10 digits
-                          if (phoneError && phoneError.includes('already registered')) {
+                          if (phoneError && phoneError.includes('already exist')) {
                             setPhoneError(null);
                           }
                         }
@@ -1185,6 +1626,341 @@ export default function App() {
               </form>
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+
+      {/* Saved Contacts Modal */}
+      <AnimatePresence>
+        {isSavedContactsOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => {
+                setIsSavedContactsOpen(false);
+                setContactFormError(null);
+              }}
+              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white w-full max-w-md rounded-2xl shadow-2xl p-6 my-auto z-10 flex flex-col max-h-[85vh] overflow-hidden"
+            >
+              {/* Header */}
+              <div className="flex justify-between items-center mb-5 shrink-0">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    <Contact className="text-indigo-600 animate-pulse" size={24} />
+                    Saved Contacts
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">Manage saved customer contacts</p>
+                </div>
+                <button 
+                  onClick={() => {
+                    setIsSavedContactsOpen(false);
+                    setContactFormError(null);
+                  }}
+                  className="p-1.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Saved Contacts List */}
+              <div className="flex-1 overflow-y-auto no-scrollbar space-y-3 pr-1">
+                <div className="flex justify-between items-center">
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    Your Contacts ({savedContacts.length})
+                  </p>
+                  {savedContacts.length > 0 && (
+                    <span className="text-[10px] text-indigo-500 font-bold bg-indigo-50 px-2 py-0.5 rounded-full">
+                      Click card to select
+                    </span>
+                  )}
+                </div>
+
+                {savedContacts.length === 0 ? (
+                  <div className="text-center py-8 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                    <Contact className="mx-auto text-slate-300 mb-2" size={32} />
+                    <p className="text-sm font-medium text-slate-500">No saved contacts yet</p>
+                    <p className="text-xs text-slate-400 mt-1">Save customers above for quick access</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-2.5">
+                    {savedContacts.map(contact => (
+                      <motion.div
+                        key={contact.id}
+                        layout
+                        onClick={() => handleSelectContact(contact)}
+                        className="group flex justify-between items-center bg-white border border-slate-100 hover:border-indigo-100 hover:shadow-sm p-3.5 rounded-xl transition-all cursor-pointer relative overflow-hidden"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="bg-indigo-50 p-2.5 rounded-lg text-indigo-600 group-hover:bg-indigo-100 transition-all shrink-0">
+                            <Contact size={18} />
+                          </div>
+                          <div className="text-left">
+                            <p className="font-semibold text-slate-800 text-sm group-hover:text-indigo-600 transition-colors">
+                              {contact.name}
+                            </p>
+                            <p className="text-xs font-medium text-slate-500 font-mono mt-0.5 flex items-center gap-1">
+                              <Phone size={11} className="text-slate-400" />
+                              +91 {contact.phone}
+                            </p>
+                          </div>
+                        </div>
+                        
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmingContactDelete(contact.id);
+                          }}
+                          className="p-1.5 rounded-full text-slate-400 hover:text-rose-500 hover:bg-rose-50 transition-colors"
+                          title="Delete contact"
+                        >
+                          <X size={16} />
+                        </button>
+
+                        {/* Inline Delete Confirmation Overlay */}
+                        <AnimatePresence>
+                          {confirmingContactDelete === contact.id && (
+                            <motion.div
+                              initial={{ opacity: 0, scale: 0.95 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              exit={{ opacity: 0, scale: 0.95 }}
+                              onClick={(e) => e.stopPropagation()}
+                              className="absolute inset-0 bg-rose-500 flex justify-between items-center px-4 py-2 text-white z-20 text-left"
+                            >
+                              <p className="font-bold text-xs">Delete contact?</p>
+                              <div className="flex gap-2">
+                                <button 
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setConfirmingContactDelete(null);
+                                  }}
+                                  className="px-2.5 py-1 bg-rose-600 rounded-lg text-[10px] font-semibold hover:bg-rose-700 transition-colors"
+                                >
+                                  Cancel
+                                </button>
+                                <button 
+                                  type="button"
+                                  onClick={(e) => {
+                                    handleDeleteContact(contact.id, e);
+                                    setConfirmingContactDelete(null);
+                                  }}
+                                  className="px-2.5 py-1 bg-white text-rose-600 rounded-lg text-[10px] font-bold hover:bg-slate-100 transition-colors shadow-sm"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Recently Deleted Modal */}
+      <AnimatePresence>
+        {isRecentlyDeletedOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsRecentlyDeletedOpen(false)}
+              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white w-full max-w-md rounded-2xl shadow-2xl p-6 my-auto z-10 flex flex-col max-h-[85vh] overflow-hidden"
+            >
+              {/* Header */}
+              <div className="flex justify-between items-center mb-5 shrink-0">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    <History className="text-rose-600 animate-pulse" size={24} />
+                    Recently Deleted
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">Customers saved here for 15 days before permanent deletion</p>
+                </div>
+                <button 
+                  onClick={() => setIsRecentlyDeletedOpen(false)}
+                  className="p-1.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Deleted Customers List */}
+              <div className="flex-1 overflow-y-auto no-scrollbar space-y-3 pr-1">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  Deleted Customers ({recentlyDeleted.length})
+                </p>
+
+                {recentlyDeleted.length === 0 ? (
+                  <div className="text-center py-12 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                    <History className="mx-auto text-slate-300 mb-2" size={36} />
+                    <p className="text-sm font-medium text-slate-500">No recently deleted customers</p>
+                    <p className="text-xs text-slate-400 mt-1">Deleted customers will be kept here for 15 days</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-3">
+                    {recentlyDeleted.map(deleted => {
+                      const totalAmt = deleted.debts.reduce((sum, d) => {
+                        return d.entryType === 'payment' ? sum - d.amount : sum + d.amount;
+                      }, 0);
+                      
+                      const elapsed = Date.now() - new Date(deleted.deletedAt).getTime();
+                      const daysLeft = Math.max(1, 15 - Math.floor(elapsed / (24 * 60 * 60 * 1000)));
+
+                      return (
+                        <motion.div
+                          key={deleted.id}
+                          layout
+                          className="bg-white border border-slate-100 p-4 rounded-xl shadow-sm hover:border-slate-200 transition-all text-left flex flex-col gap-3 relative overflow-hidden"
+                        >
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <p className="font-bold text-slate-800 text-sm">
+                                {deleted.name}
+                              </p>
+                              <p className="text-xs font-medium text-slate-500 font-mono mt-0.5 flex items-center gap-1">
+                                <Phone size={11} className="text-slate-400" />
+                                +91 {deleted.phone}
+                              </p>
+                            </div>
+                            
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${daysLeft <= 3 ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-rose-50 text-rose-600 border border-rose-100'}`}>
+                              {daysLeft} {daysLeft === 1 ? 'day' : 'days'} left
+                            </span>
+                          </div>
+
+                          <div className="flex justify-between items-center bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                            <div>
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Owed</p>
+                              <p className={`text-sm font-black ${totalAmt >= 0 ? 'text-[#4B49FF]' : 'text-emerald-600'}`}>
+                                ₹{Math.abs(totalAmt).toLocaleString()}
+                                {totalAmt < 0 && <span className="text-[10px] font-semibold ml-1 text-emerald-500">(Advance)</span>}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Transactions</p>
+                              <p className="text-xs font-bold text-slate-700">
+                                {deleted.debts.length} {deleted.debts.length === 1 ? 'record' : 'records'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2 justify-end pt-1 border-t border-slate-50 shrink-0">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmingPermanentDelete(deleted.id);
+                              }}
+                              className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-all flex items-center gap-1"
+                              title="Delete permanently"
+                            >
+                              <Trash2 size={13} />
+                              Delete
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRestoreCustomer(deleted)}
+                              className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-lg text-xs font-bold transition-all flex items-center gap-1 shadow-sm"
+                              title="Restore customer and debts"
+                            >
+                              <RotateCcw size={13} />
+                              Restore
+                            </button>
+                          </div>
+
+                          {/* Inline Delete Confirmation Overlay */}
+                          <AnimatePresence>
+                            {confirmingPermanentDelete === deleted.id && (
+                              <motion.div
+                                initial={{ opacity: 0, scale: 0.95 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.95 }}
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute inset-0 bg-rose-500 flex flex-col justify-center items-center p-4 text-white z-20 text-center gap-2"
+                              >
+                                <p className="font-bold text-xs">Delete permanently?</p>
+                                <div className="flex gap-2">
+                                  <button 
+                                    onClick={() => setConfirmingPermanentDelete(null)}
+                                    className="px-3 py-1 bg-rose-600 rounded-lg text-[10px] font-semibold hover:bg-rose-700 transition-colors"
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button 
+                                    onClick={(e) => {
+                                      handlePermanentDeleteCustomer(deleted.id, e);
+                                      setConfirmingPermanentDelete(null);
+                                    }}
+                                    className="px-3 py-1 bg-white text-rose-600 rounded-lg text-[10px] font-bold hover:bg-slate-100 transition-colors shadow-sm"
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </motion.div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      
+      {/* Hidden file input for Restore */}
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        onChange={handleFileChange} 
+        style={{ display: 'none' }} 
+        accept="application/json,.json" 
+      />
+
+      {/* Floating Toast Notification */}
+      <AnimatePresence>
+        {notification && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, x: "-50%" }}
+            animate={{ opacity: 1, y: 0, x: "-50%" }}
+            exit={{ opacity: 0, y: -20, x: "-50%" }}
+            className="fixed top-6 left-1/2 z-50 pointer-events-none"
+          >
+            <div className={`px-5 py-3 rounded-xl shadow-2xl flex items-center gap-2.5 text-white font-bold text-sm border ${
+              notification.type === 'success' 
+                ? 'bg-emerald-500 border-emerald-400 shadow-emerald-500/10' 
+                : 'bg-rose-500 border-rose-400 shadow-rose-500/10'
+            }`}>
+              {notification.type === 'success' ? (
+                <Check size={16} className="shrink-0 bg-white/20 p-0.5 rounded-full" />
+              ) : (
+                <X size={16} className="shrink-0 bg-white/20 p-0.5 rounded-full" />
+              )}
+              <span>{notification.message}</span>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
 

@@ -21,3 +21,18 @@ export interface DebtFormData {
   reason: string;
   entryType: 'debt' | 'payment';
 }
+
+export interface SavedContact {
+  id: string;
+  name: string;
+  phone: string;
+}
+
+export interface DeletedCustomer {
+  id: string;
+  name: string;
+  phone: string;
+  debts: Debt[];
+  deletedAt: string;
+}
+
