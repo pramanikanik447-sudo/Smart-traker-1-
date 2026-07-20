@@ -421,8 +421,16 @@ export default function App() {
               className="h-full overflow-y-auto no-scrollbar momentum-scroll"
             >
               <div className="pt-4 px-1">
-                <div className="flex justify-between items-center mb-5 mt-2">
-                  <h1 className="text-3xl font-black text-slate-900 tracking-tight">Smart Traker</h1>
+                <div className="flex justify-between items-center mb-6 mt-2">
+                  <div className="flex flex-col">
+                    <h1 className="text-2xl md:text-3xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-indigo-700 to-indigo-400 tracking-tight flex items-center gap-3">
+                      <div className="bg-indigo-100 p-2 rounded-xl shadow-sm">
+                        <Banknote className="w-6 h-6 text-indigo-600" />
+                      </div>
+                      Smart Tracker
+                    </h1>
+                    <p className="text-[13px] text-slate-500 font-semibold ml-1 mt-1.5 uppercase tracking-wider">Financial Management</p>
+                  </div>
                 </div>
 
                 {/* Summary Card */}
