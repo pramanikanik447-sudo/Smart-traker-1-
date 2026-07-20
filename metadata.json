@@ -1,0 +1,6 @@
+{
+  "name": "Smart Tracker",
+  "description": "A simple and efficient tool to track debts, manage customer balances, and share payment reminders via WhatsApp.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

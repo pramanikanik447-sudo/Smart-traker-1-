@@ -1,0 +1,17 @@
+                        <div className="flex-1 min-w-0">
+                          <h2 className="text-3xl font-black text-slate-900 tracking-tight mb-1 break-words">{customerGroups[selectedCustomerKey!]?.name}</h2>
+                          <p className="text-slate-500 text-base font-bold">
+                            {customerGroups[selectedCustomerKey!]?.phone ? 
+                              (customerGroups[selectedCustomerKey!]?.phone.length === 10 ? '+91 ' : '') + customerGroups[selectedCustomerKey!]?.phone : 
+                              'No phone number'}
+                          </p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400  mb-0.5">Total Due</p>
+                          <p className={`text-2xl font-black tracking-tighter ${customerGroups[selectedCustomerKey!]?.total > 0 ? 'text-indigo-600' : 'text-emerald-600'}`}>
+                            ₹{customerGroups[selectedCustomerKey!]?.total.toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
